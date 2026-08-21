@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#0b0f14">
-<title>Echelon EX-4 Controller</title>
+<title>Echelon EX-5 Controller</title>
 <style>
   :root{
     --bg:#0b0f14; --panel:#141b24; --panel2:#1b2530; --line:#26323f;
@@ -107,10 +107,11 @@
 
   <header>
     <div>
-      <h1>Echelon EX-4 Controller</h1>
+      <h1>Echelon EX-5 Controller</h1>
       <div class="sub">Web Bluetooth · open in <b>Bluefy</b> on iPhone</div>
     </div>
     <div class="spacer"></div>
+    <span class="pill" id="rxPill" title="BLE frames received" style="display:none">📡 <span id="rxCount">0</span></span>
     <span class="pill"><span id="dot" class="dot"></span><span id="status">Disconnected</span></span>
   </header>
 
@@ -137,9 +138,9 @@
     <div class="metric big"><span class="label">Cadence</span><span class="val" id="mCad">–</span><span class="unit">RPM</span></div>
     <div class="metric big"><span class="label">Resistance</span><span class="val" id="mRes">–</span><span class="unit">of <span id="maxRes2">32</span></span></div>
     <div class="metric"><span class="label">Power (est.)</span><span class="val" id="mPow">–</span><span class="unit">watts · uncalibrated</span></div>
-    <div class="metric"><span class="label">Heart rate</span><span class="val" id="mHr">–</span><span class="unit">bpm · if paired</span></div>
+    <div class="metric"><span class="label">Distance</span><span class="val" id="mDist">–</span><span class="unit">km/mi · bike setting</span></div>
     <div class="metric"><span class="label">Session</span><span class="val" id="mTime">0:00</span><span class="foot">since connect</span></div>
-    <div class="metric"><span class="label">Revolutions</span><span class="val" id="mRev">–</span><span class="foot">total this ride</span></div>
+    <div class="metric"><span class="label">Bike timer</span><span class="val" id="mBikeTime">–</span><span class="foot">from the bike itself</span></div>
   </div>
 
   <!-- MANUAL CONTROL -->
@@ -228,8 +229,8 @@ const CMD_GETRES   = 0xA5; // request current resistance
 
 const state = {
   device:null, gatt:null, wr:null, nt:null, connected:false,
-  armed:false, resTarget:0, resActual:0, cadence:0, hr:0, rev:0,
-  connectedAt:0, timer:null
+  armed:false, resTarget:0, resActual:0, cadence:0, distance:0, bikeElapsed:0,
+  pkts:0, connectedAt:0, timer:null
 };
 
 /* ---------- helpers ---------- */
@@ -290,6 +291,7 @@ async function connect(showAll){
 
 function onDisconnect(){
   state.connected=false; state.wr=null; state.nt=null;
+  state.pkts=0; $("#rxPill").style.display="none";
   setStatus("","Disconnected");
   stopTimer();
   stopWorkout();
@@ -319,15 +321,17 @@ async function setResistance(level, force){
 /* ---------- notifications / parser ---------- */
 function onNotify(ev){
   const b = new Uint8Array(ev.target.value.buffer);
+  // live "data flowing" counter, regardless of packet type
+  state.pkts++; $("#rxCount").textContent=state.pkts; $("#rxPill").style.display="inline-flex";
   if(b[0]!==0xF0){ log("in","« "+hex(b)+"  (no preamble)"); return; }
   const action=b[1];
   let decoded="";
-  if(action===0xD1){                        // workout status
-    const rev=(b[5]<<24)|(b[6]<<16)|(b[7]<<8)|b[8];
-    const cad=(b[9]<<8)|b[10];              // RPM (verify offset live)
-    const hr=b[11];
-    state.rev=rev>>>0; state.cadence=cad; if(hr>0&&hr<240) state.hr=hr;
-    decoded=`cad=${cad} rev=${state.rev} hr=${hr}`;
+  if(action===0xD1){                        // workout status (offsets per qdomyos-zwift)
+    const elapsed  = (b[3]<<8)|b[4];        // bike's own timer, seconds
+    const distance = ((b[7]<<8)|b[8])/100;  // distance (km/mi per bike setting)
+    const cad      = b[10];                 // cadence RPM — single byte at index 10
+    state.cadence=cad; state.distance=distance; state.bikeElapsed=elapsed;
+    decoded=`cad=${cad} dist=${distance.toFixed(2)} t=${elapsed}s`;
     updateDash();
   }else if(action===0xD2){                   // resistance level
     state.resActual=b[3];
@@ -350,11 +354,12 @@ function estPower(res,cad){ if(!cad) return 0; return Math.round((P60[clampRes(r
 
 /* ---------- dashboard ---------- */
 function updateDash(){
-  $("#mCad").textContent = state.cadence||"0";
-  $("#mRes").textContent = state.resActual;
-  $("#mPow").textContent = estPower(state.resActual, state.cadence);
-  $("#mHr").textContent  = state.hr||"–";
-  $("#mRev").textContent = state.rev||"0";
+  $("#mCad").textContent  = state.cadence||"0";
+  $("#mRes").textContent  = state.resActual;
+  $("#mPow").textContent  = estPower(state.resActual, state.cadence);
+  $("#mDist").textContent = (state.distance||0).toFixed(2);
+  const t=state.bikeElapsed||0;
+  $("#mBikeTime").textContent = `${Math.floor(t/60)}:${String(t%60).padStart(2,"0")}`;
 }
 function startTimer(){ stopTimer(); state.timer=setInterval(()=>{
   const s=Math.floor((Date.now()-state.connectedAt)/1000);

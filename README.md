@@ -1,6 +1,6 @@
-# Echelon EX-4 Controller
+# Echelon EX-5 Controller
 
-A single-page Web Bluetooth app for the Echelon EX-4 bike that adds interval
+A single-page Web Bluetooth app for the Echelon EX-5 bike that adds interval
 automation and a custom live dashboard on top of what the stock Echelon app
 offers. No build step, no dependencies — one `index.html`.
 
@@ -37,7 +37,10 @@ Echelon bikes use a proprietary BLE service (base UUID
 
 Frames are `0xF0` preamble · action byte · length · data · checksum
 (sum of preceding bytes & `0xFF`). Key actions: `0xB1` set resistance,
-`0xA5` get resistance, `0xB0` activation/handshake; notifications `0xD1`
-(workout status: cadence, revolutions, HR) and `0xD2` (resistance).
+`0xA5` get resistance, `0xB0` activation/handshake; notifications `0xD2`
+(resistance level at byte 3) and `0xD1` workout status, whose byte offsets
+(confirmed against qdomyos-zwift) are: elapsed time = bytes 3–4, distance =
+bytes 7–8 ÷100, **cadence RPM = byte 10** (a single byte). The bike does not
+report heart rate on this characteristic.
 
-Power is an **uncalibrated estimate** — the EX-4 has no power meter.
+Power is an **uncalibrated estimate** — the EX-5 has no power meter.
