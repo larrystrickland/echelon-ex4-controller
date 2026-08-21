@@ -216,16 +216,21 @@
 
 <script>
 "use strict";
-/* ---------- Echelon EX-4 BLE protocol ---------- */
+/* ---------- Echelon EX-5 BLE protocol ---------- */
 const SVC    = "0bf669f1-45f2-11e7-9598-0800200c9a66";
 const CH_WR  = "0bf669f2-45f2-11e7-9598-0800200c9a66"; // write commands
-const CH_NT  = "0bf669f4-45f2-11e7-9598-0800200c9a66"; // notifications
+const CH_NT1 = "0bf669f3-45f2-11e7-9598-0800200c9a66"; // notify 1 (live telemetry)
+const CH_NT2 = "0bf669f4-45f2-11e7-9598-0800200c9a66"; // notify 2
 const MAXRES = 32;
 
 // Command action bytes
+const CMD_DEVINFO  = 0xA1; // get device info (part of wake-up handshake)
+const CMD_RESRANGE = 0xA3; // get resistance range
 const CMD_ACTIVATE = 0xB0; // start data stream
 const CMD_SETRES   = 0xB1; // set resistance level
 const CMD_GETRES   = 0xA5; // request current resistance
+
+const sleep = ms => new Promise(r=>setTimeout(r,ms));
 
 const state = {
   device:null, gatt:null, wr:null, nt:null, connected:false,
@@ -273,13 +278,20 @@ async function connect(showAll){
     state.gatt = gatt;
     const svc = await gatt.getPrimaryService(SVC);
     state.wr = await svc.getCharacteristic(CH_WR);
-    state.nt = await svc.getCharacteristic(CH_NT);
-    await state.nt.startNotifications();
-    state.nt.addEventListener("characteristicvaluechanged", onNotify);
-    log("sys",`Connected to ${device.name||"device"}. Subscribing…`);
-    // activation handshake — asks the bike to start streaming
+    // Subscribe to BOTH notify characteristics — live telemetry comes on f3.
+    for(const uuid of [CH_NT1, CH_NT2]){
+      try{
+        const ch = await svc.getCharacteristic(uuid);
+        await ch.startNotifications();
+        ch.addEventListener("characteristicvaluechanged", onNotify);
+      }catch(err){ log("sys",`⚠ could not subscribe ${uuid.slice(6,8)}: ${err.message}`); }
+    }
+    log("sys",`Connected to ${device.name||"device"}. Sending wake-up handshake…`);
+    // Wake-up handshake (per qdomyos-zwift): A1×4, A3, A1, then B0 activate.
+    for(let i=0;i<4;i++){ await writeCmd(CMD_DEVINFO, [], true); await sleep(60); }
+    await writeCmd(CMD_RESRANGE, [], true); await sleep(60);
+    await writeCmd(CMD_DEVINFO, [], true);  await sleep(60);
     await writeCmd(CMD_ACTIVATE, [0x01], true);
-    await writeCmd(CMD_GETRES, [], true);
     state.connected=true; state.connectedAt=Date.now();
     setStatus("on", device.name||"Connected");
     startTimer();
@@ -321,9 +333,10 @@ async function setResistance(level, force){
 /* ---------- notifications / parser ---------- */
 function onNotify(ev){
   const b = new Uint8Array(ev.target.value.buffer);
+  const src = (ev.target.uuid||"").slice(6,8) || "??"; // which characteristic (f3/f4)
   // live "data flowing" counter, regardless of packet type
   state.pkts++; $("#rxCount").textContent=state.pkts; $("#rxPill").style.display="inline-flex";
-  if(b[0]!==0xF0){ log("in","« "+hex(b)+"  (no preamble)"); return; }
+  if(b[0]!==0xF0){ log("in",`«[${src}] `+hex(b)+"  (no preamble)"); return; }
   const action=b[1];
   let decoded="";
   if(action===0xD1){                        // workout status (offsets per qdomyos-zwift)
@@ -344,7 +357,7 @@ function onNotify(ev){
   }else{
     decoded=`action=0x${action.toString(16).padStart(2,"0")}`;
   }
-  log("in","« "+hex(b)+"   "+decoded);
+  log("in",`«[${src}] `+hex(b)+"   "+decoded);
 }
 
 /* ---------- power estimate (uncalibrated) ---------- */
